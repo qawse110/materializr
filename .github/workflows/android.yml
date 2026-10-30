@@ -1,0 +1,186 @@
+name: Android Build
+
+# Builds the Android debug APK for arm64-v8a and then proves the package is
+# usable: the CJK face is inside assets/fonts, libmain.so and the cross-built
+# OCCT shared libraries are inside lib/arm64-v8a, every shared object is
+# 16 KB page aligned, and every Simplified Chinese catalogue string is really
+# compiled into libmain.so. A green run therefore means "the Chinese UI can
+# ship", not just "gradle exited 0".
+#
+# The expensive step is android/scripts/setup-deps.sh, which cross-builds OCCT
+# with the NDK (tens of minutes) and rm -rf's its build directories on every
+# run, so it can never reuse a stale tree. This workflow caches the installed
+# prefix plus the extracted SDL3 source and SKIPS the script on a hit; only the
+# cheap staging steps (SDL symlink, copy-occt-libs.sh) run unconditionally, so
+# warm and cold runs reach the build in exactly the same state.
+
+on:
+  push:
+    branches: [ main, 'ci/**' ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'packaging/**'
+  pull_request:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'packaging/**'
+  workflow_dispatch:
+
+# A newer push on the same ref cancels the run in flight: the old APK would
+# have been built from a tree nobody wants any more.
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ABI: arm64-v8a
+  # Bump to force a cold native-dependency rebuild when a cache entry is
+  # suspected of being stale or poisoned rather than simply wrong.
+  DEPS_EPOCH: v1
+
+jobs:
+  apk:
+    # No ${{ env.* }} expression here on purpose: the env context is not
+    # available in jobs.<id>.name, and using it invalidates the whole workflow
+    # file (the run fails in 0 s with no jobs created and no log to read).
+    # Keep the ABI out of the name; the summary step reports it instead.
+    name: Debug APK
+    runs-on: ubuntu-24.04
+    # The cold path is dominated by the OCCT cross-build plus the first native
+    # compile of the app; 4 h leaves room for a slow but healthy runner instead
+    # of killing the run minutes before the artifact exists.
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # The runner image ships NDK 27/29/30 and SDK CMake 3.31/4.1, but
+      # android/app/build.gradle pins ndkVersion 28.2.13676358 and
+      # externalNativeBuild cmake version 3.22.1. AGP can auto-install those,
+      # yet a failed auto-install surfaces as a confusing "NDK not configured"
+      # deep inside the configure phase, so install the exact pins up front.
+      #
+      # NOTE: this leaves the pre-set ANDROID_NDK pointing at r27, which is
+      # what setup-deps.sh should use - the OCCT .so files are cross-built with
+      # r27 and linked against the r28 STL on purpose (see the comment on
+      # ndkVersion in android/app/build.gradle).
+      - name: Install the pinned NDK and CMake
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then SDKMANAGER="$(command -v sdkmanager)"; fi
+          echo "sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" --install "ndk;28.2.13676358" "cmake;3.22.1" "platforms;android-35" "build-tools;35.0.0"
+          echo "--- NDKs now installed ---"
+          ls "$ANDROID_HOME/ndk"
+
+      - name: Restore native dependencies
+        id: deps
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/Android/prefix
+            ~/Android/src/SDL3-3.4.18
+          key: android-deps-${{ env.DEPS_EPOCH }}-${{ env.ABI }}-${{ hashFiles('android/scripts/setup-deps.sh', 'android/copy-occt-libs.sh') }}
+
+      - name: Cross-build FreeType and OCCT (cold cache)
+        if: steps.deps.outputs.cache-hit != 'true'
+        env:
+          JOBS: '4'
+        run: |
+          set -euo pipefail
+          echo "setup-deps.sh: ABI=$ABI JOBS=$JOBS NDK=$ANDROID_NDK"
+          start=$SECONDS
+          bash android/scripts/setup-deps.sh
+          echo "DEPS_SECONDS=$((SECONDS-start))" >> "$GITHUB_ENV"
+
+      - name: Save native dependencies
+        if: steps.deps.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/Android/prefix
+            ~/Android/src/SDL3-3.4.18
+          key: android-deps-${{ env.DEPS_EPOCH }}-${{ env.ABI }}-${{ hashFiles('android/scripts/setup-deps.sh', 'android/copy-occt-libs.sh') }}
+
+      # setup-deps.sh also populates two gitignored places INSIDE the repo: the
+      # SDL3 source symlink the CMake project walks into with add_subdirectory,
+      # and the staged OCCT .so files plus the OCCT resource assets. Both are
+      # cheap and idempotent, so reproduce them on every path.
+      - name: Stage SDL3 and OCCT libraries into the app tree
+        run: |
+          set -euo pipefail
+          ln -sfn "$HOME/Android/src/SDL3-3.4.18" android/app/jni/SDL
+          test -f android/app/jni/SDL/CMakeLists.txt || {
+            echo "::error title=SDL3 stage::android/app/jni/SDL does not contain the SDL3 source tree"; exit 1; }
+          bash android/copy-occt-libs.sh "$ABI"
+          count=$(find "android/app/src/main/jniLibs/$ABI" -name 'libTK*.so' | wc -l)
+          echo "staged OCCT libraries: $count"
+          [ "$count" -gt 50 ] || { echo "::error title=OCCT stage::only $count OCCT libraries staged"; exit 1; }
+
+      - name: Cache Gradle downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/build.gradle', 'android/app/build.gradle', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Build the debug APK
+        run: |
+          set -euo pipefail
+          cd android
+          start=$SECONDS
+          ./gradlew --no-daemon --stacktrace -PtargetAbi="$ABI" assembleDebug
+          echo "GRADLE_SECONDS=$((SECONDS-start))" >> "$GITHUB_ENV"
+
+      # The interesting failure mode is not "gradle failed" but "the APK built
+      # and is missing a piece the app needs at runtime": a font that never got
+      # extracted, an OCCT library dropped by the packaging rules, a shared
+      # object Android 15 refuses to load, or a catalogue that was never
+      # regenerated. tools/android_apk_check.py opens the artifact and looks,
+      # and the same script runs locally against any APK.
+      - name: Verify the APK contains the Chinese UI
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK" || { echo "::error title=APK missing::$APK was not produced"; exit 1; }
+          python3 tools/android_apk_check.py "$APK" --abi "$ABI" 2>&1 | tee /tmp/apk-check.txt
+          echo "APK_BYTES=$(stat -c %s "$APK")" >> "$GITHUB_ENV"
+
+      - name: Build summary
+        if: always()
+        run: |
+          {
+            echo "## Android debug APK (${{ env.ABI }})"
+            echo ""
+            echo "| stage | seconds |"
+            echo "| --- | --- |"
+            echo "| native deps | ${DEPS_SECONDS:-cached} |"
+            echo "| gradle | ${GRADLE_SECONDS:-n/a} |"
+            echo ""
+            echo "APK bytes: ${APK_BYTES:-n/a}"
+            echo ""
+            echo '```
+            cat /tmp/apk-check.txt 2>/dev/null || echo "no verification output"
+            echo '```
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Materializr-android-${{ env.ABI }}-debug
+          retention-days: ${{ github.event_name == 'pull_request' && 2 || 90 }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
