@@ -1158,6 +1158,23 @@ void Application::initImGui() {
                                              &cfg, kIconRange))
                 std::fprintf(stderr, "Loaded font: %s (icon merge)\n", icons.c_str());
         }
+
+        // Merge the CJK face so the Chinese interface has glyphs at all.
+        // JetBrains Mono is Latin-only, so without this every hanzi renders as
+        // the fallback box. ImGui 1.92 resolves a codepoint by walking the
+        // font's sources IN ORDER and taking the first that has it, so the
+        // Latin face keeps winning for ASCII/Latin-1 exactly as before and
+        // Noto only fills the gaps - no glyph ranges needed (same mechanism as
+        // the icon merge above). No GlyphOffset either: Noto's ascent/descent
+        // already sit on the shared baseline, unlike the icon font's optical
+        // nudge. The subset is GB2312 + ASCII + punctuation, ~2.2 MB.
+        std::string zh = resolveBundledFont("NotoSansSC-Regular.ttf");
+        if (fnt && !zh.empty()) {
+            ImFontConfig cfg;
+            cfg.MergeMode = true;
+            if (io.Fonts->AddFontFromFileTTF(zh.c_str(), 15.0f * uiScale, &cfg))
+                std::fprintf(stderr, "Loaded font: %s (CJK merge)\n", zh.c_str());
+        }
     }
 
     m_window->initImGuiBackend();

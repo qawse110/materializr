@@ -7,6 +7,15 @@ All notable changes to Materializr are documented here. Format loosely follows
 
 ### Added
 
+- **The interface speaks Chinese.** Simplified Chinese (简体中文) joins English,
+  Spanish, Portuguese, French, German and Italian as a UI language, chosen on
+  first run or any time in Settings ▸ Appearance. All 1,615 interface strings
+  are translated, so menus, tools, tooltips, panels, dialogs and settings
+  descriptions switch together; switching is instant and needs no restart. The
+  app bundles a GB2312 subset of Noto Sans SC and merges it into the UI font, so
+  hanzi render without depending on a system font. As with the other languages
+  the translations are machine-drafted against a CAD glossary - native-speaker
+  review is welcome.
 - **Grid rendering (experimental)** in Settings ▸ Rendering: three workarounds
   for a grid that shimmers or flickers with anti-aliasing on certain GPU drivers
   (seen on Intel Arc). Leave it on Default unless the grid looks wrong.

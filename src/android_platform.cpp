@@ -84,7 +84,8 @@ void androidInitRuntime() {
     //     cwd-relative "assets/fonts/<name>" candidate resolves.
     if (chdir(internal.c_str()) != 0) logi("chdir to internal storage failed");
     // MUST list every font the Text-tool picker offers (kFontFiles in
-    // Application_Dialogs.cpp) - SDL's asset IOStream can't enumerate a directory,
+    // Application_Dialogs.cpp) PLUS the UI-only faces that Application::initImGui
+    // merges into the atlas - SDL's asset IOStream can't enumerate a directory,
     // so any font missing here is bundled in the APK but never extracted and
     // shows "font file not found".
     const char* fonts[] = {
@@ -92,7 +93,9 @@ void androidInitRuntime() {
         "LiberationSerif-Regular.ttf", "LiberationSans-Regular.ttf",
         "Ubuntu-Regular.ttf", "ComicNeue-Regular.ttf",
         "BlackOpsOne-Regular.ttf", "Anton-Regular.ttf", "Pacifico-Regular.ttf",
-        "Iconoir.ttf" // UI icon glyphs (im-touch shell), not a Text-tool font
+        "Iconoir.ttf", // UI icon glyphs (im-touch shell), not a Text-tool font
+        // CJK glyphs for the Chinese interface, merged after the icons.
+        "NotoSansSC-Regular.ttf"
     };
     for (const char* f : fonts) {
         extractAsset(std::string("fonts/") + f, internal + "/assets/fonts/" + f);

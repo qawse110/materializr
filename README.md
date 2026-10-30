@@ -248,5 +248,7 @@ this would exist without them.
 
 Ten typefaces ship for the sketch Text tool (JetBrains Mono, DejaVu Sans &
 Serif, Liberation Sans & Serif, Ubuntu, Comic Neue, Black Ops One, Anton,
-Pacifico), plus the Iconoir icon font for the UI. Full credits, copyrights
-and license texts: [`assets/fonts/FONT-CREDITS.md`](assets/fonts/FONT-CREDITS.md).
+Pacifico), plus two UI-only faces merged into the interface font atlas: the
+Iconoir icon font and a Noto Sans SC subset that gives the Chinese interface its
+hanzi. Full credits, copyrights and license texts:
+[`assets/fonts/FONT-CREDITS.md`](assets/fonts/FONT-CREDITS.md).

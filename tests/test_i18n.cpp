@@ -45,6 +45,7 @@ std::vector<Catalogue> allCatalogues() {
         { "French",     materializr::kFrCatalogue, materializr::kFrCount, Lang::French     },
         { "German",     materializr::kDeCatalogue, materializr::kDeCount, Lang::German     },
         { "Italian",    materializr::kItCatalogue, materializr::kItCount, Lang::Italian    },
+        { "Chinese",    materializr::kZhCatalogue, materializr::kZhCount, Lang::Chinese    },
     };
 }
 
@@ -64,9 +65,18 @@ unsigned decodeUtf8(const char* s, int& len) {
 
 // Latin-1 and Latin Extended-A are taken as always available: every accented
 // letter any of the shipped languages needs lives there, and the bundled
-// JetBrains Mono covers them.
+// JetBrains Mono covers them. The CJK blocks are equally covered, by the
+// bundled Noto Sans SC subset merged into the UI atlas for Chinese.
 bool alwaysAvailable(unsigned cp) {
     if (cp <= 0x017F) return true;   // Latin-1 + Latin Extended-A
+    // CJK ranges the Chinese column draws from. Noto Sans SC carries all of
+    // them (GB2312: 6763 hanzi plus punctuation and fullwidth forms), so a
+    // Chinese translation may use any of these without a per-glyph audit --
+    // the same standing guarantee the Latin-1 line above makes.
+    if (cp >= 0x2E80 && cp <= 0x9FFF) return true;   // CJK radicals .. unified
+    if (cp >= 0xF900 && cp <= 0xFAFF) return true;   // compatibility ideographs
+    if (cp >= 0xFE30 && cp <= 0xFE4F) return true;   // CJK compatibility forms
+    if (cp >= 0xFF00 && cp <= 0xFFEF) return true;   // halfwidth/fullwidth forms
     // Typographic characters the ENGLISH UI already uses somewhere, so the
     // font provably renders them; a translation may use them freely even where
     // its own key does not (pt likes an em dash where en used a hyphen).
@@ -115,6 +125,11 @@ TEST(I18n, TranslatesAKnownString) {
     EXPECT_STREQ(tr("Fillet"), "Verrundung");
     setLanguage(Lang::French);
     EXPECT_STREQ(tr("Fillet"), "Cong\xc3\xa9");        // Congé
+    // Chinese is the only non-Latin column; the hex escapes keep this file
+    // ASCII so the build works without a /utf-8 switch.
+    setLanguage(Lang::Chinese);
+    EXPECT_STREQ(tr("Fillet"), "\xe5\x9c\x86\xe8\xa7\x92");    // yuan jiao
+    EXPECT_STREQ(tr("Chamfer"), "\xe5\x80\x92\xe8\xa7\x92");   // dao jiao
 }
 
 TEST(I18n, UnknownStringFallsBackToEnglish) {
@@ -173,6 +188,8 @@ TEST(I18n, SwitchingLanguageTakesEffectImmediately) {
     EXPECT_STREQ(tr("Save"), "Guardar");
     setLanguage(Lang::Italian);
     EXPECT_STREQ(tr("Save"), "Salva");
+    setLanguage(Lang::Chinese);
+    EXPECT_STREQ(tr("Save"), "\xe4\xbf\x9d\xe5\xad\x98");       // bao cun
     setLanguage(Lang::English);
     EXPECT_STREQ(tr("Save"), "Save");
     EXPECT_EQ(language(), Lang::English);
@@ -271,6 +288,10 @@ TEST(I18n, StatefulLabelsKeepTheirPinnedId) {
     EXPECT_STREQ(tr("Appearance###Appearance"), "Apariencia###Appearance");
     setLanguage(Lang::German);
     EXPECT_STREQ(tr("Appearance###Appearance"), "Darstellung###Appearance");
+    setLanguage(Lang::Chinese);
+    // "wai guan" (Appearance) plus the id half, byte for byte.
+    EXPECT_STREQ(tr("Appearance###Appearance"),
+                 "\xe5\xa4\x96\xe8\xa7\x82###Appearance");
     // The pinned id is what ImGui hashes, so it must be identical in every
     // language -- that is the whole point.
     setLanguage(Lang::Spanish);

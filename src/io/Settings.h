@@ -224,9 +224,9 @@ struct AppSettings {
 
     // --- Language ---
     // UI language index; mirrors materializr::Lang (0 = English, then Spanish,
-    // Portuguese, French, German, Italian). Kept as an int so this header does
-    // not depend on i18n.h. -1 means "never chosen", which is what makes the
-    // setup wizard ask on first run.
+    // Portuguese, French, German, Italian, Chinese). Kept as an int so this
+    // header does not depend on i18n.h. -1 means "never chosen", which is what
+    // makes the setup wizard ask on first run.
     int  language = -1;
     // Display unit for every length readout and input: materializr::LengthUnit
     // (0 mm, 1 cm, 2 m, 3 in, 4 ft). An int for the same reason language is -

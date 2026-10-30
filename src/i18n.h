@@ -29,7 +29,7 @@ namespace materializr {
 
 // Keep in sync with Settings::language and tools/i18n_catalogue.py's LANGS.
 // English is always 0 and is the fallback for every missing string.
-enum class Lang { English = 0, Spanish, Portuguese, French, German, Italian, COUNT };
+enum class Lang { English = 0, Spanish, Portuguese, French, German, Italian, Chinese, COUNT };
 
 // Active language. Switching is LIVE: ImGui rebuilds every string from scratch
 // every frame, and ImGui 1.92 rasterises glyphs on demand, so a language change

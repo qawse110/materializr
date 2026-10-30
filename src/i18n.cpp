@@ -43,6 +43,11 @@ const Cat kCats[] = {
     { kFrCatalogue,   kFrCount,   "Fran\xc3\xa7""ais",  "French"     },
     { kDeCatalogue,   kDeCount,   "Deutsch",     "German"     },
     { kItCatalogue,   kItCount,   "Italiano",    "Italian"    },
+    // Simplified Chinese. Four CJK characters, so the same ""-split hex
+    // escapes as the accented names above keep this file 7-bit clean --
+    // the build has no /utf-8 switch, and MSVC reads a raw byte here in
+    // the local code page.
+    { kZhCatalogue,   kZhCount,   "\xe7\xae\x80\xe4\xbd\x93\xe4\xb8\xad\xe6\x96\x87", "Chinese" },
 };
 static_assert(sizeof(kCats) / sizeof(kCats[0]) ==
                   static_cast<std::size_t>(Lang::COUNT),
