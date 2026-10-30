@@ -95,6 +95,114 @@ def parse_catalogue(header_text, symbol):
     return rows
 
 
+# --- TrueType glyph coverage ------------------------------------------------
+
+def ttf_codepoints(data):
+    """Every Unicode codepoint that has a glyph in a TrueType font.
+
+    The UI atlas is a merge stack: ImGui 1.92 walks the sources in order and
+    keeps the first font that has a codepoint (imgui_draw.cpp,
+    ImFontBaked_BuildLoadGlyph), so a character is drawable when ANY font in the
+    stack covers it and a character no font covers is drawn as a hollow box.
+    That is the failure this checks for: the translations can be perfect and the
+    interface still unreadable.
+
+    The sfnt table directory and cmap formats 4 and 12 are parsed by hand so the
+    CI runner needs nothing beyond the Python standard library.
+    """
+    if len(data) < 12 or data[:4] not in (b"\x00\x01\x00\x00", b"true", b"OTTO"):
+        return set()
+    num_tables = struct.unpack_from(">H", data, 4)[0]
+    cmap_offset = None
+    for index in range(num_tables):
+        record = 12 + index * 16
+        if record + 16 > len(data):
+            break
+        if data[record:record + 4] == b"cmap":
+            cmap_offset = struct.unpack_from(">I", data, record + 8)[0]
+            break
+    if cmap_offset is None or cmap_offset + 4 > len(data):
+        return set()
+
+    codepoints = set()
+    count = struct.unpack_from(">H", data, cmap_offset + 2)[0]
+    for index in range(count):
+        record = cmap_offset + 4 + index * 8
+        if record + 8 > len(data):
+            break
+        platform, encoding = struct.unpack_from(">HH", data, record)
+        subtable = cmap_offset + struct.unpack_from(">I", data, record + 4)[0]
+        if subtable + 2 > len(data):
+            continue
+        # Unicode subtables only: platform 0 is Unicode; platform 3 is Windows,
+        # where encoding 1 is the BMP and 10 the full range.
+        if platform != 0 and not (platform == 3 and encoding in (1, 10)):
+            continue
+        fmt = struct.unpack_from(">H", data, subtable)[0]
+        if fmt == 4:
+            codepoints |= _cmap_format4(data, subtable)
+        elif fmt == 12:
+            codepoints |= _cmap_format12(data, subtable)
+    return codepoints
+
+
+def _cmap_format4(data, subtable):
+    """Segment-mapped BMP subtable (format 4)."""
+    out = set()
+    seg_x2 = struct.unpack_from(">H", data, subtable + 6)[0]
+    segments = seg_x2 // 2
+    ends = subtable + 14
+    starts = ends + seg_x2 + 2
+    deltas = starts + seg_x2
+    range_offsets = deltas + seg_x2
+    for index in range(segments):
+        if ends + index * 2 + 2 > len(data):
+            break
+        end = struct.unpack_from(">H", data, ends + index * 2)[0]
+        start = struct.unpack_from(">H", data, starts + index * 2)[0]
+        delta = struct.unpack_from(">H", data, deltas + index * 2)[0]
+        range_offset_pos = range_offsets + index * 2
+        if range_offset_pos + 2 > len(data):
+            break
+        range_offset = struct.unpack_from(">H", data, range_offset_pos)[0]
+        if start > end:
+            continue
+        for codepoint in range(start, end + 1):
+            if codepoint == 0xFFFF:
+                continue
+            if range_offset == 0:
+                glyph = (codepoint + delta) & 0xFFFF
+            else:
+                address = range_offset_pos + range_offset + 2 * (codepoint - start)
+                if address + 2 > len(data):
+                    continue
+                glyph = struct.unpack_from(">H", data, address)[0]
+                if glyph:
+                    glyph = (glyph + delta) & 0xFFFF
+            if glyph:
+                out.add(codepoint)
+    return out
+
+
+def _cmap_format12(data, subtable):
+    """Segmented coverage subtable for the whole Unicode range (format 12)."""
+    out = set()
+    if subtable + 16 > len(data):
+        return out
+    groups = struct.unpack_from(">I", data, subtable + 12)[0]
+    for index in range(groups):
+        record = subtable + 16 + index * 12
+        if record + 12 > len(data):
+            break
+        start, end, glyph = struct.unpack_from(">III", data, record)
+        if start > end:
+            continue
+        for codepoint in range(start, end + 1):
+            if glyph + (codepoint - start):
+                out.add(codepoint)
+    return out
+
+
 # --- ELF / APK helpers ------------------------------------------------------
 
 def elf_load_alignments(data):
@@ -142,6 +250,11 @@ def main():
     parser.add_argument("--min-occt", type=int, default=50,
                         help="minimum libTK*.so count in the APK")
     parser.add_argument("--min-page-align", type=int, default=16384)
+    parser.add_argument("--font-stack", nargs="+", default=[
+        "JetBrainsMono-Regular.ttf",   # base face: Latin, Greek, arrows
+        "Iconoir.ttf",                 # UI icons, merged second
+        "NotoSansSC-Regular.ttf",      # CJK, merged third
+    ], help="fonts merged into the ImGui atlas, in merge order")
     parser.add_argument("--skip-signature", action="store_true")
     args = parser.parse_args()
 
@@ -169,6 +282,34 @@ def main():
             check(source.is_file() and packaged == source.read_bytes(),
                   "packaged font matches the repo copy",
                   "%d bytes" % len(packaged))
+
+        # 1b. Every character of every Chinese string must be drawable by the
+        #     font stack the UI actually builds (base face, then the icon face,
+        #     then the CJK face, merged in that order). A character that no
+        #     source covers is a hollow box on screen even though the string is
+        #     present in the binary and the catalogue checks pass, so probe the
+        #     cmaps of the fonts INSIDE the package, not the ones in the repo.
+        stack = [n for n in args.font_stack if "assets/fonts/" + n in names]
+        check(len(stack) == len(args.font_stack), "font stack packaged",
+              "%d/%d of %s" % (len(stack), len(args.font_stack),
+                               ", ".join(args.font_stack)))
+        if stack:
+            covered = set()
+            for name in stack:
+                covered |= ttf_codepoints(apk.read("assets/fonts/" + name))
+            unpaired = {}
+            for en, zh in rows:
+                for character in zh:
+                    if character in "\n\r\t":
+                        continue
+                    if ord(character) not in covered:
+                        unpaired.setdefault(character, en)
+            check(not unpaired, "every Chinese character has a glyph",
+                  "%d unpaired: %s" % (len(unpaired),
+                                       ", ".join("U+%04X" % ord(c)
+                                                 for c in sorted(unpaired)))
+                  if unpaired else "%d codepoints across %d faces"
+                  % (len(covered), len(stack)))
 
         # 2. Native payload: libmain.so plus the r28 STL plus cross-built OCCT.
         libmain = "lib/%s/libmain.so" % args.abi
