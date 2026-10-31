@@ -124,9 +124,24 @@ jobs:
           test -f android/app/jni/SDL/CMakeLists.txt || {
             echo "::error title=SDL3 stage::android/app/jni/SDL does not contain the SDL3 source tree"; exit 1; }
           bash android/copy-occt-libs.sh "$ABI"
+          # The copy script only warns about an empty prefix; a wildcard that
+          # silently matches nothing would otherwise reach gradle as an APK with
+          # no geometry kernel. Assert the toolkits the native code actually
+          # links, not a round number: OCCT 7.9.3 with this feature set yields
+          # exactly 50 libTK*.so, so an earlier "greater than 50" check failed a
+          # perfectly good build.
           count=$(find "android/app/src/main/jniLibs/$ABI" -name 'libTK*.so' | wc -l)
           echo "staged OCCT libraries: $count"
-          [ "$count" -gt 50 ] || { echo "::error title=OCCT stage::only $count OCCT libraries staged"; exit 1; }
+          missing=""
+          for lib in TKernel TKMath TKG2d TKG3d TKGeomBase TKGeomAlgo TKTopAlgo TKBRep \
+                     TKPrim TKBO TKBool TKFillet TKOffset TKMesh TKService TKV3d \
+                     TKOpenGles TKDESTL TKDESTEP TKDEIGES TKRWMesh TKCAF TKXCAF; do
+            test -f "android/app/src/main/jniLibs/$ABI/lib$lib.so" || missing="$missing $lib"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error title=OCCT stage::missing toolkits:$missing"
+            exit 1
+          fi
 
       - name: Cache Gradle downloads
         uses: actions/cache@v4
@@ -173,9 +188,9 @@ jobs:
             echo ""
             echo "APK bytes: ${APK_BYTES:-n/a}"
             echo ""
-            echo '```
+            echo '```'
             cat /tmp/apk-check.txt 2>/dev/null || echo "no verification output"
-            echo '```
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload debug APK
